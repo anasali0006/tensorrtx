@@ -418,6 +418,23 @@ class warmUpThread(threading.Thread):
         batch_image_raw, use_time = self.yolov5_wrapper.infer(self.yolov5_wrapper.get_raw_image_zeros())
         print('warm_up->{}, time->{:.2f}ms'.format(batch_image_raw[0].shape, use_time * 1000))
 
+class VideoStreamWidget(object):
+    def __init__(self, src=0):
+        # Create a VideoCapture object
+        self.capture = cv2.VideoCapture(src)
+        if self.capture.isOpened()==False :
+            print("Error running video")
+        # Start the thread to read frames from the video stream
+        self.thread = threading.Thread(target=self.update, args=())
+        self.thread.daemon = True
+        self.thread.start()
+
+    def update(self):
+        # Read the next frame from the stream in a different thread
+        while True:
+            if self.capture.isOpened():
+                (self.status, self.frame) = self.capture.read()
+
 
 class inferThread_Video(threading.Thread):
     def __init__(self, yolov5_wrapper, video_path):
@@ -430,14 +447,15 @@ class inferThread_Video(threading.Thread):
         frame_count=0
         fps=0
         #cap = cv2.VideoCapture( self.video_path+"video.mp4" )
-        cap=cv2.VideoCapture("rtsp://admin:abc12345@10.50.15.182")
-        if cap.isOpened()==False :
-            print("Error running video")
-        while (cap.isOpened()):
-            t1=time.time()
-            ret,frame = cap.read()
-            t2=time.time()
-            if ret==True:
+        src="rtsp://admin:abc12345@10.50.15.182"
+        stream_widget=VideoStreamWidget(src)
+        
+        while (True):
+
+            try:
+                t1=time.time()
+                frame = stream_widget.frame
+                t2=time.time()
                 frame_count+=1
                 if frame_count%100==0:
                     present_time=datetime.datetime.now()
@@ -454,14 +472,17 @@ class inferThread_Video(threading.Thread):
                 t6=time.time()
                 cv2.imshow("Results",new_image)
                 cv2.waitKey(1)            
-            else:
-                break
-            # t7=time.time()
-            #print( 'ideal time->{:.2f}ms, fps->{:.2f}'.format( use_time * 1000, fps))
-            print('Frame Read:{:0.4f}, FPS_Calc:{:0.4f}, App:{:0.4f}, Preprocessing:{:0.4f}, Inference:{:0.4f}, Postprocessing:{:0.4f}, Resize:{:0.4f}, FPS:{:0.4f}'.format
-            ((t2-t1)*1000,(t3-t2)*1000,(t4-t3)*1000,preprocess_time, infer_time, post_time, (t6-t5)*1000, fps))
-        cap.release()
-        cv2.destroyAllWindows()        
+                # t7=time.time()
+                #print( 'ideal time->{:.2f}ms, fps->{:.2f}'.format( use_time * 1000, fps))
+                print('Frame Read:{:0.4f}, FPS_Calc:{:0.4f}, App:{:0.4f}, Preprocessing:{:0.4f}, Inference:{:0.4f}, Postprocessing:{:0.4f}, Resize:{:0.4f}, FPS:{:0.4f}'.format
+                ((t2-t1)*1000,(t3-t2)*1000,(t4-t3)*1000,preprocess_time, infer_time, post_time, (t6-t5)*1000, fps))
+            except AttributeError:
+                pass 
+            
+        stream_widget.cap.release()
+        cv2.destroyAllWindows()  
+
+
 
 
 if __name__ == "__main__":
