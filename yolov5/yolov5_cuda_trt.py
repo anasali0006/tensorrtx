@@ -150,10 +150,10 @@ class YoLov5TRT(object):
         batch_original_w = []
         batch_input_image = np.empty(shape=[self.batch_size, 3, self.input_h, self.input_w])
         for i, image_raw in enumerate(raw_image_generator):
-            input_image, image_raw, origin_h, origin_w = self.preprocess_image(image_raw)
+            input_image, image_raw, original_h, original_w = self.preprocess_image(image_raw)
             batch_image_raw.append(image_raw)
-            batch_original_h.append(origin_h)
-            batch_original_w.append(origin_w)
+            batch_original_h.append(original_h)
+            batch_original_w.append(original_w)
             np.copyto(batch_input_image[i], input_image)
         batch_input_image = np.ascontiguousarray(batch_input_image)
 
@@ -227,6 +227,10 @@ class YoLov5TRT(object):
         """
         image_raw = raw_bgr_image
         h, w, c = image_raw.shape
+
+        #heights for the output display(to be added through function input)
+        display_height=480
+        display_width=640
         
         # Calculate widht and height and paddings
         r_w = self.input_w / w
@@ -245,13 +249,20 @@ class YoLov5TRT(object):
             ty1 = ty2 = 0
 
         gpu_frame_preprocess=self.gpu_frame_preprocess
+        extra_frame=self.gpu_frame_preprocess
         gpu_frame_preprocess.upload(image_raw)
         #convert color from BGR to RGB
         gpu_frame_preprocess = cv2.cuda.cvtColor(gpu_frame_preprocess, cv2.COLOR_BGR2RGB)
         # Resize the image with long side while maintaining ratio
+        extra_frame= cv2.cuda.resize(gpu_frame_preprocess, (display_width, display_height))
         gpu_frame_preprocess = cv2.cuda.resize(gpu_frame_preprocess, (tw, th))
-        # Pad the short side with (128,128,128)
+        
+        image_raw=extra_frame.download()
         image=gpu_frame_preprocess.download()
+        
+        
+
+        # Pad the short side with (128,128,128)
         image = cv2.copyMakeBorder(
             image, ty1, ty2, tx1, tx2, cv2.BORDER_CONSTANT, (128, 128, 128)
         )        
@@ -264,43 +275,43 @@ class YoLov5TRT(object):
         image = np.expand_dims(image, axis=0)
         # Convert the image to row-major order, also known as "C order":
         image = np.ascontiguousarray(image)
-        return image, image_raw, h, w
+        return image, image_raw, display_height, display_width
 
-    def xywh2xyxy(self, origin_h, origin_w, x):
+    def xywh2xyxy(self, original_h, original_w, x):
         """
         description:    Convert nx4 boxes from [x, y, w, h] to [x1, y1, x2, y2] where xy1=top-left, xy2=bottom-right
         param:
-            origin_h:   height of original image
-            origin_w:   width of original image
+            original_h:   height of original image
+            original_w:   width of original image
             x:          A boxes numpy, each row is a box [center_x, center_y, w, h]
         return:
             y:          A boxes numpy, each row is a box [x1, y1, x2, y2]
         """
         y = np.zeros_like(x)
-        r_w = self.input_w / origin_w
-        r_h = self.input_h / origin_h
+        r_w = self.input_w / original_w
+        r_h = self.input_h / original_h
         if r_h > r_w:
             y[:, 0] = x[:, 0] - x[:, 2] / 2
             y[:, 2] = x[:, 0] + x[:, 2] / 2
-            y[:, 1] = x[:, 1] - x[:, 3] / 2 - (self.input_h - r_w * origin_h) / 2
-            y[:, 3] = x[:, 1] + x[:, 3] / 2 - (self.input_h - r_w * origin_h) / 2
+            y[:, 1] = x[:, 1] - x[:, 3] / 2 - (self.input_h - r_w * original_h) / 2
+            y[:, 3] = x[:, 1] + x[:, 3] / 2 - (self.input_h - r_w * original_h) / 2
             y /= r_w
         else:
-            y[:, 0] = x[:, 0] - x[:, 2] / 2 - (self.input_w - r_h * origin_w) / 2
-            y[:, 2] = x[:, 0] + x[:, 2] / 2 - (self.input_w - r_h * origin_w) / 2
+            y[:, 0] = x[:, 0] - x[:, 2] / 2 - (self.input_w - r_h * original_w) / 2
+            y[:, 2] = x[:, 0] + x[:, 2] / 2 - (self.input_w - r_h * original_w) / 2
             y[:, 1] = x[:, 1] - x[:, 3] / 2
             y[:, 3] = x[:, 1] + x[:, 3] / 2
             y /= r_h
 
         return y
 
-    def post_process(self, output, origin_h, origin_w):
+    def post_process(self, output, original_h, original_w):
         """
         description: postprocess the prediction
         param:
             output:     A numpy likes [num_boxes,cx,cy,w,h,conf,cls_id, cx,cy,w,h,conf,cls_id, ...] 
-            origin_h:   height of original image
-            origin_w:   width of original image
+            original_h:   height of original image
+            original_w:   width of original image
         return:
             result_boxes: finally boxes, a boxes numpy, each row is a box [x1, y1, x2, y2]
             result_scores: finally scores, a numpy, each element is the score correspoing to box
@@ -311,7 +322,7 @@ class YoLov5TRT(object):
         # Reshape to a two dimentional ndarray
         pred = np.reshape(output[1:], (-1, 6))[:num, :]
         # Do nms
-        boxes = self.non_max_suppression(pred, origin_h, origin_w, conf_thres=CONF_THRESH, nms_thres=IOU_THRESHOLD)
+        boxes = self.non_max_suppression(pred, original_h, original_w, conf_thres=CONF_THRESH, nms_thres=IOU_THRESHOLD)
         result_boxes = boxes[:, :4] if len(boxes) else np.array([])
         result_scores = boxes[:, 4] if len(boxes) else np.array([])
         result_classid = boxes[:, 5] if len(boxes) else np.array([])
@@ -354,14 +365,14 @@ class YoLov5TRT(object):
 
         return iou
 
-    def non_max_suppression(self, prediction, origin_h, origin_w, conf_thres=0.5, nms_thres=0.4):
+    def non_max_suppression(self, prediction, original_h, original_w, conf_thres=0.5, nms_thres=0.4):
         """
         description: Removes detections with lower object confidence score than 'conf_thres' and performs
         Non-Maximum Suppression to further filter detections.
         param:
             prediction: detections, (x1, y1, x2, y2, conf, cls_id)
-            origin_h: original image height
-            origin_w: original image width
+            original_h: original image height
+            original_w: original image width
             conf_thres: a confidence threshold to filter detections
             nms_thres: a iou threshold to filter detections
         return:
@@ -370,12 +381,12 @@ class YoLov5TRT(object):
         # Get the boxes that score > CONF_THRESH
         boxes = prediction[prediction[:, 4] >= conf_thres]
         # Trandform bbox from [center_x, center_y, w, h] to [x1, y1, x2, y2]
-        boxes[:, :4] = self.xywh2xyxy(origin_h, origin_w, boxes[:, :4])
+        boxes[:, :4] = self.xywh2xyxy(original_h, original_w, boxes[:, :4])
         # clip the coordinates
-        boxes[:, 0] = np.clip(boxes[:, 0], 0, origin_w -1)
-        boxes[:, 2] = np.clip(boxes[:, 2], 0, origin_w -1)
-        boxes[:, 1] = np.clip(boxes[:, 1], 0, origin_h -1)
-        boxes[:, 3] = np.clip(boxes[:, 3], 0, origin_h -1)
+        boxes[:, 0] = np.clip(boxes[:, 0], 0, original_w -1)
+        boxes[:, 2] = np.clip(boxes[:, 2], 0, original_w -1)
+        boxes[:, 1] = np.clip(boxes[:, 1], 0, original_h -1)
+        boxes[:, 3] = np.clip(boxes[:, 3], 0, original_h -1)
         # Object confidence
         confs = boxes[:, 4]
         # Sort by the confs
@@ -468,14 +479,14 @@ class inferThread_Video(threading.Thread):
                 t4=time.time()
                 batch_image_raw, use_time, preprocess_time, infer_time, post_time = self.yolov5_wrapper.infer(video_frame_batch)
                 t5=time.time()
-                new_image = cv2.resize(batch_image_raw[0], (1280,720), interpolation=cv2.INTER_AREA)
+                #new_image = cv2.resize(batch_image_raw[0], (1280,720), interpolation=cv2.INTER_AREA)
                 t6=time.time()
-                cv2.imshow("Results",new_image)
+                cv2.imshow("Results",batch_image_raw[0])
                 cv2.waitKey(1)            
-                # t7=time.time()
+                t7=time.time()
                 #print( 'ideal time->{:.2f}ms, fps->{:.2f}'.format( use_time * 1000, fps))
-                print('Frame Read:{:0.4f}, FPS_Calc:{:0.4f}, App:{:0.4f}, Preprocessing:{:0.4f}, Inference:{:0.4f}, Postprocessing:{:0.4f}, Resize:{:0.4f}, FPS:{:0.4f}'.format
-                ((t2-t1)*1000,(t3-t2)*1000,(t4-t3)*1000,preprocess_time, infer_time, post_time, (t6-t5)*1000, fps))
+                print('Frame Read:{:0.4f}, FPS_Calc:{:0.4f}, App:{:0.4f}, Preprocessing:{:0.4f}, Inference:{:0.4f}, Postprocessing:{:0.4f}, Resize:{:0.4f}, Show:{:0.4f}, FPS:{:0.4f}'.format
+                ((t2-t1)*1000,(t3-t2)*1000,(t4-t3)*1000,preprocess_time, infer_time, post_time, (t6-t5)*1000, (t7-t6)*1000,fps))
             except AttributeError:
                 pass 
             
